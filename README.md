@@ -43,7 +43,11 @@ If any of the above execution classes are used, the results will always be saved
 While the results of the calculation of the goodness of the internal validation indices for our model will be found in the file "part-00000" of the folder "Resuts-Al_Indexes" and the format in each line will be:
 * "K,silhouette,dunn,silhouettBD,dunnBD,davis-bouldin": Referring to the values of each of the indexes that are implemented for each of the "K" clusters to be tested by our algorithm. The order in which these indexes appear can be modified by the user if desired.
 
-To better illustrate the results that could be obtained, we present an example using the database "C3-D20-I100p" available within the "data" folder of this same project. The results obtained after applying both the agglomerative hierarchical clustering model and the internal validation indices implemented are as follows:
+To better illustrate the results that could be obtained, we present an example using the database "C3-D20-I100p" available within the "data" folder of this same project. To illustrate the dendrogram resulting from the hierarchical clustering model with the "avg" strategy for the aforementioned database, we can see the following representation (This representation has been made thanks to the technologies of ["Jupyter"](https://jupyter.org/) and ["Scipy"](https://www.scipy.org/), using Python as the driving language for it.):
+
+![Agglomerative hierarchical clustering for the "C3-D20-I100" database with the "avg" strategy.](https://github.com/Joseda13/LinkageClustering/blob/master/Dendrogram-C3-300p.PNG)
+
+As can be seen there are clearly three distinct clusters within the instances of the database used as input to our algorithm. The results obtained after applying both the agglomerative hierarchical clustering model and the internal validation indices implemented are as follows:
 
 ![Summary table of the results of the internal validation indices testing from K = 2 to K = 10.](https://github.com/Joseda13/LinkageClustering/blob/master/C3-300p-Results.PNG)
 
