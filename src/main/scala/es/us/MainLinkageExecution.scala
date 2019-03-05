@@ -18,7 +18,7 @@ object MainLinkageExecution {
     import spark.implicits._
 
     //Configuration settings
-    var dataFile = "B:\\Datasets\\Test_Varios\\C3-D20-I100"
+    var pathToDatabase = "B:\\Datasets\\Test_Varios\\C3-D20-I100"
     var delimiter = ","
     var numCluster = 1
     var numPoints = 300
@@ -27,7 +27,7 @@ object MainLinkageExecution {
     var pathToLinkageModel = ""
 
     if (args.length > 2){
-      dataFile = args.apply(0)
+      pathToDatabase = args.apply(0)
       delimiter = args.apply(1)
       numCluster = args.apply(2).toInt
       numPoints = args.apply(3).toInt
@@ -41,7 +41,7 @@ object MainLinkageExecution {
       .option("header", "false")
       .option("inferSchema", "true")
       .option("delimiter", delimiter)
-      .csv(dataFile)
+      .csv(pathToDatabase)
       .cache()
 
     //Save all columns as Seq[Double]
@@ -83,10 +83,11 @@ object MainLinkageExecution {
     println("*** Strategy = " + linkageStrategy + "***")
     println("Executing Linkage Clustering Algorithm ...")
     val clustering = linkage.runAlgorithm(distancesRDD, numPoints)
+//    val clustering = linkage.runAlgorithmDendrogram(distancesRDD, numPoints, numCluster)
 
     println("Saving the model ...")
     //Save the result
-    clustering.saveSchema(pathToLinkageModel)
+    clustering._1.saveSchema(pathToLinkageModel)
     println("Model saved!")
 
     spark.stop()

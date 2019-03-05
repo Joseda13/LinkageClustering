@@ -39,13 +39,13 @@ class Linkage(
   }
 
   /**
-    * Return the Linkage model to given distance data
-    * @param distanceMatrix    RDD to the distances between all points to given data
-    * @param numPoints The number of points into given data
-    * @return A Linkage model to given data
+    * Return the Linkage M0del to given distance data and its execution time
+    * @param distanceMatrix RDD to the distances between all points to given data.
+    * @param numPoints The number of points into given data.
+    * @return A Linkage model to given data.
     * @example runAlgorithm(distanceMatrix, 150)
     */
-  def runAlgorithm(distanceMatrix: RDD[Distance], numPoints: Int): LinkageModel = {
+  def runAlgorithm(distanceMatrix: RDD[Distance], numPoints: Int): (LinkageModel, Double) = {
 
     val start = System.nanoTime
 
@@ -190,7 +190,7 @@ class Linkage(
     logInfo("Time for linkage clustering: " + duration)
 
     //Return a new LinkageModel based into the model
-    (new LinkageModel(sc.parallelize(linkageModel.toSeq), sc.emptyRDD[Vector].collect()))
+    (new LinkageModel(sc.parallelize(linkageModel.toSeq), sc.emptyRDD[Vector].collect()), duration)
 
   }
 
@@ -320,10 +320,10 @@ class Linkage(
   }
 
   /**
-    * Return the Linkage model to given distance data and all points with its cluster number
-    * @param distanceMatrix    RDD to the distances between all points to given data
-    * @param numPoints The number of points into given data
-    * @return A Linkage model to given data and RDD with (Int, Int) [point and cluster number]
+    * Return the Linkage model to given distance data and all points with its cluster number.
+    * @param distanceMatrix RDD to the distances between all points to given data.
+    * @param numPoints The number of points into given data.
+    * @return A Linkage model to given data and RDD with (Int, Int) [point and cluster number].
     * @example runAlgorithmWithResult(distanceMatrix, 150)
     */
   def runAlgorithmWithResult(distanceMatrix: RDD[Distance], numPoints: Int): (LinkageModel, RDD[(Int,Int)]) = {
@@ -452,11 +452,11 @@ class Linkage(
   }
 
   /**
-    * Save the result of Linkage algorithm into a external file with the dendogram format to representation with Python library
-    * @param distanceMatrix    RDD to the distances between all points to given data
-    * @param numPoints The number of points into given data
-    * @param numClusters The number of clusters
-    * @return Nothing
+    * Save the result of Linkage algorithm into a external file with the dendogram format to representation with Python library.
+    * @param distanceMatrix RDD to the distances between all points to given data.
+    * @param numPoints The number of points into given data.
+    * @param numClusters The number of clusters.
+    * @return Nothing.
     * @example runAlgorithmDendrogram(distanceMatrix, 150, 5)
     */
   def runAlgorithmDendrogram(distanceMatrix: RDD[Distance], numPoints: Int, numClusters: Int) = {
@@ -583,12 +583,13 @@ class Linkage(
             //Add the points with the new index
             matrixSub.union(newPoints)
         }
+
       }
 
       //The distance matrix is ​​persisted to improve the performance of the algorithm
-      matrix = matrix.coalesce(partitionNumber / 2).persist(StorageLevel.MEMORY_ONLY_2)
-      totalPoints = totalPoints.coalesce(partitionNumber / 2).persist(StorageLevel.DISK_ONLY_2)
-      model = model.coalesce(partitionNumber / 2).persist(StorageLevel.DISK_ONLY_2)
+//      matrix = matrix.coalesce(partitionNumber / 2).persist(StorageLevel.MEMORY_AND_DISK_2)
+//      totalPoints = totalPoints.coalesce(partitionNumber / 2).persist(StorageLevel.MEMORY_AND_DISK_2)
+//      model = model.coalesce(partitionNumber / 2).persist(StorageLevel.MEMORY_AND_DISK_2)
 
       //Every 5 iterations a checkpoint of the distance matrix is ​​done to improve the performance of the algorithm
       if (a % 5 == 0) {

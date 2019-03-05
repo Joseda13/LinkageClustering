@@ -1,13 +1,13 @@
 package es.us
 
-import es.us.linkage.{Distance, Linkage, LinkageModel}
-import es.us.spark.mllib.clustering.validation.Indices
+import es.us.linkage.LinkageModel
+import es.us.spark.mllib.clustering.validation.Indexes
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.monotonically_increasing_id
 
-object MainClusterIndicesWithoutLinkageModelExecution {
+object MainClusterIndexesWithLinkageModelExecution {
 
   def main(args: Array[String]): Unit = {
     Logger.getLogger("org").setLevel(Level.OFF)
@@ -23,20 +23,20 @@ object MainClusterIndicesWithoutLinkageModelExecution {
     //Set up the global variables
     var numCluster = 3
     var numPoints = 300
-    var linkageStrategy = "avg"
+    var pathToLinkageModel = s"linkageModels/Linkage-C3-$numPoints"+"p\\part-00000"
     var pathToCheckPoint = "B:\\checkpoints"
     var pathToDatabase = s"data/C$numCluster-D20-I100"
     var delimiter = ","
 
     //Set up the limits of the algorithm
-    var minimumCluster = 3
-    var maximumCluster = 9
+    var minimumCluster = 2
+    var maximumCluster = 10
     var pathToResult = ""
 
     if (args.length > 2){
       numCluster = args.apply(0).toInt
       numPoints = args.apply(1).toInt
-      linkageStrategy = args.apply(2)
+      pathToLinkageModel = args.apply(2)
       pathToCheckPoint = args.apply(3)
       pathToDatabase = args.apply(4)
       delimiter = args.apply(5)
@@ -83,32 +83,14 @@ object MainClusterIndicesWithoutLinkageModelExecution {
         .map(s => s.split(";"))
         .map(row => (row(0).toInt, Vectors.dense(row(1).replace("(", "").replace(")", "").split(",").map(_.toDouble))))
 
-      //Rename the columns and generate a new DataFrame copy of the previous to be able to do the subsequent filtered out in the join
-      val newColumnsNames = Seq("valueAux", "indexAux")
-      val dataAuxRenamed = dataAux.toDF(newColumnsNames: _*)
-
-      //Calculate the distance between all points
-      val distances = dataAux.crossJoin(dataAuxRenamed)
-        .filter(r => r.getLong(1) < r.getLong(3))
-        .map{r =>
-          //Depending on the method chosen one to perform the distance, the value of the same will change
-          val dist = Utils.distEuclidean(r.getSeq[Double](0), r.getSeq[Double](2))
-
-          //Return the result saving: (point 1, point 2, the distance between both)
-          (r.getLong(1), r.getLong(3), dist)
-        }
-
-      //Save the distances between all points in a RDD[Distance]
-      val distancesRDD = distances.rdd.map(_.toString().replace("(", "").replace(")", ""))
-        .map(s => s.split(',').map(_.toFloat))
-        .map { case x =>
-          new Distance(x(0).toInt, x(1).toInt, x(2))
-        }.filter(x => x.getIdW1 < x.getIdW2).repartition(16)
-
       spark.sparkContext.setCheckpointDir(pathToCheckPoint)
 
-      val linkage = new Linkage(numCluster, linkageStrategy)
-      val clustering = linkage.runAlgorithm(distancesRDD, numPoints)
+      val linkage = spark.sparkContext.textFile(pathToLinkageModel)
+        .map(s => s.split(',').map(_.toInt))
+        .map{
+          case x => (x(0).toLong, (x(1), x(2)))}
+
+      val clustering = new LinkageModel(linkage, spark.sparkContext.emptyRDD[Vector].collect())
 
       val totalPoints = spark.sparkContext.parallelize(1 to numPoints).cache()
 
@@ -127,21 +109,19 @@ object MainClusterIndicesWithoutLinkageModelExecution {
 
       println("*** K = " + numCluster + " ***")
       println("*** Points = " + numPoints + "***")
-      println("*** Linkage Strategy = " + linkageStrategy + "***")
       println("Executing Indices ...")
-      val silhouetteValues = Indices.getSilhouette(dataRDD.collect())
-      val dunnValues = Indices.getDunn(dataRDD.collect())
-      val BDValues = Indices.getIndicesBD(clustering, spark.sparkContext, dataReadSeq, numCluster)
+      val silhouetteValues = Indexes.getSilhouette(dataRDD.collect())
+      val dunnValues = Indexes.getDunn(dataRDD.collect())
+      val BDValues = Indexes.getIndexesBD_Linkage(clustering, spark.sparkContext, dataReadSeq, numCluster)
       println("VALUES:")
       println("\tSilhouette: " + silhouetteValues._3)
       println("\tDunn: " + dunnValues._3)
       println("\tSilhouette-BD: " + BDValues._1)
       println("\tDunn-BD: " + BDValues._2)
-      println("\tDavid-Bouldin: " + BDValues._3)
-      println("\tWSSE: " + BDValues._4)
+      println("\tDavis-Bouldin: " + BDValues._3)
       println("\n")
 
-      (s"$numCluster-", silhouetteValues._3, dunnValues._3, BDValues._1, BDValues._2, BDValues._3, BDValues._4)
+      (s"$numCluster-", silhouetteValues._3, dunnValues._3, BDValues._1, BDValues._2, BDValues._3)
 
     }
 
@@ -151,7 +131,7 @@ object MainClusterIndicesWithoutLinkageModelExecution {
     println("Saving the result ...")
     stringRdd.repartition(1)
       .map(_.toString().replace("(", "").replace(")", ""))
-      .saveAsTextFile(s"$pathToResult-Results-All_Indices-" + Utils.whatTimeIsIt())
+      .saveAsTextFile(s"$pathToResult-Results-All_Indexes-" + Utils.whatTimeIsIt())
     println("Results saved!")
 
     spark.stop()

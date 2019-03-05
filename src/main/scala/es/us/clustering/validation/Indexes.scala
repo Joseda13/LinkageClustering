@@ -2,38 +2,136 @@ package es.us.spark.mllib.clustering.validation
 
 import es.us.linkage.LinkageModel
 import org.apache.spark.SparkContext
-import org.apache.spark.mllib.clustering.KMeans
+import org.apache.spark.mllib.clustering.BisectingKMeansModel
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
-import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.Dataset
 
-object Indices {
+object Indexes {
 
-  def getIndicesBD(linkage: LinkageModel, sparkContext: SparkContext, data:  Dataset[scala.Seq[Double]], numberCluster: Int): (Double, Double, Double, Double) = {
+  /**
+    * Return SilhouetteBD, DunnBD, Davis-Bouldin and WSSSE validity clustering indices and its execution time after using Bisecting-KMeans.
+    * @param clustering Bisecting KMeans Model from MLlib.
+    * @param data RDD with each point in Vector format.
+    * @param numberCluster Set the number of clusters.
+    * @param sparkContext SparkContext.
+    * @example getIndexesBD_BKM(clustering, data, 5, sparkContext)
+    */
+  def getIndexesBD_BKM(clustering: BisectingKMeansModel, data: RDD[org.apache.spark.mllib.linalg.Vector], numberCluster: Int, sparkContext: SparkContext): (Double, Double, Double, Double, Double, Double, Double, Double) = {
 
-    //Global Center
-    val centroides = sparkContext.parallelize(linkage.clusterCenters)
-    val centroidesCartesian = centroides.cartesian(centroides).filter(x => x._1 != x._2).cache()
+    //Centroids
+    val centroids = sparkContext.parallelize(clustering.clusterCenters)
+    val centroidsCartesian = centroids.cartesian(centroids).filter(x => x._1 != x._2).cache()
 
-    val intraMean = linkage.computeCost(data.rdd.map(r => Vectors.dense(r.toArray))) / data.count()
-    val interMeanAux = centroidesCartesian.map(x => Vectors.sqdist(x._1, x._2)).reduce(_ + _)
-    val interMean = interMeanAux / centroidesCartesian.count()
+    var startTime = System.nanoTime
 
-    //Get Silhoutte index: (intercluster - intracluster)/Max(intercluster,intracluster)
-    val silhoutteBD = (interMean - intraMean) / (if (interMean > intraMean) interMean else intraMean)
+    val intraMean = clustering.computeCost(data) / data.count()
+    val interMeanAux = centroidsCartesian.map(x => Vectors.sqdist(x._1, x._2)).reduce(_ + _)
+    val interMean = interMeanAux / centroidsCartesian.count()
+
+    //SILHOUETTE
+    val silhouetteBD = (interMean - intraMean) / (if (interMean > intraMean) interMean else intraMean)
+
+    var stopTime = System.nanoTime
+    val elapsedTimeSil = (stopTime - startTime) / 1e9d
 
     //DUNN
+    startTime = System.nanoTime
+
     //Min distance between centroids
-    val minA = centroidesCartesian.map(x => Vectors.sqdist(x._1, x._2)).min()
+    val minA = centroidsCartesian.map(x => Vectors.sqdist(x._1, x._2)).min()
+
+    //Max distance from points to its centroid
+    val maxB = data.map { x =>
+      Vectors.sqdist(x, clustering.clusterCenters(clustering.predict(x)))
+    }.max
+
+    val dunnBD = minA / maxB
+
+    stopTime = System.nanoTime
+    val elapsedTimeDunn = (stopTime - startTime) / 1e9d
+
+    //DAVIS-BOULDIN
+    startTime = System.nanoTime
+
+    val avgCentroid = data.map { x =>
+      (clustering.predict(x), x)
+    }.map(x => (x._1, (Vectors.sqdist(x._2, clustering.clusterCenters(x._1)))))
+      .mapValues(x => (x, 1))
+      .reduceByKey((x, y) => (x._1 + y._1, x._2 + y._2))
+      .mapValues(y => 1.0 * y._1 / y._2)
+      .collectAsMap()
+
+    val bcAvgCentroid = sparkContext.broadcast(avgCentroid)
+
+    val centroidsWithId = centroids.zipWithIndex().map(_.swap).cache()
+
+    val cartesianCentroids = centroidsWithId.cartesian(centroidsWithId).filter(x => x._1._1 != x._2._1)
+
+    val davis = cartesianCentroids.map { case (x, y) => (x._1.toInt, (bcAvgCentroid.value(x._1.toInt) +
+      bcAvgCentroid.value(y._1.toInt)) / Vectors.sqdist(x._2, y._2)) }
+      .groupByKey()
+      .map(_._2.max)
+      .reduce(_ + _)
+
+    val bouldin = davis / numberCluster
+
+    stopTime = System.nanoTime
+    val elapsedTimeDavis = (stopTime - startTime) / 1e9d
+
+    //WSSSE
+    startTime = System.nanoTime
+    val wssse = clustering.computeCost(data)
+
+    stopTime = System.nanoTime
+    val elapsedTimeWSSE = (stopTime - startTime) / 1e9d
+
+    (silhouetteBD, dunnBD, bouldin, wssse, elapsedTimeSil, elapsedTimeDunn, elapsedTimeDavis, elapsedTimeWSSE)
+  }
+
+  /**
+    * Return SilhouetteBD, DunnBD, Davis-Bouldin and WSSSE validity clustering indices and its execution time after using Linkage clustering.
+    * @param linkage Linkage Model.
+    * @param data RDD with each point in Seq[Double] format.
+    * @param numberCluster Set the number of clusters.
+    * @example getIndexesBD_Linkage(linkage, data, 3)
+    */
+  def getIndexesBD_Linkage(linkage: LinkageModel, sparkContext: SparkContext, data: Dataset[scala.Seq[Double]], numberCluster: Int): (Double, Double, Double, Double, Double, Double, Double, Double) = {
+
+    //Centroids
+    val centroids = sparkContext.parallelize(linkage.clusterCenters)
+    val centroidsCartesian = centroids.cartesian(centroids).filter(x => x._1 != x._2).cache()
+
+    var startTime = System.nanoTime
+
+    val intraMean = linkage.computeCost(data.rdd.map(r => Vectors.dense(r.toArray))) / data.count()
+    val interMeanAux = centroidsCartesian.map(x => Vectors.sqdist(x._1, x._2)).reduce(_ + _)
+    val interMean = interMeanAux / centroidsCartesian.count()
+
+    //SILHOUETTE
+    val silhouetteBD = (interMean - intraMean) / (if (interMean > intraMean) interMean else intraMean)
+
+    var stopTime = System.nanoTime
+    val elapsedTimeSil = (stopTime - startTime) / 1e9d
+
+    //DUNN
+    startTime = System.nanoTime
+
+    //Min distance between centroids
+    val minA = centroidsCartesian.map(x => Vectors.sqdist(x._1, x._2)).min()
 
     //Max distance from points to its centroid
     val maxB = data.rdd.map(r => Vectors.dense(r.toArray)).map { x =>
       Vectors.sqdist(x, linkage.clusterCenters(linkage.predict(x)))
     }.max
 
-    //Get Dunn index: Mín(Dist centroides al centroide)/Max(dist punto al centroide)
     val dunnBD = minA / maxB
 
-    //DAVIES-BOULDIN
+    stopTime = System.nanoTime
+    val elapsedTimeDunn = (stopTime - startTime) / 1e9d
+
+    //DAVIS-BOULDIN
+    startTime = System.nanoTime
 
     val avgCentroid = data.rdd.map(r => Vectors.dense(r.toArray)).map { x =>
       (linkage.predict(x), x)
@@ -45,31 +143,40 @@ object Indices {
 
     val bcAvgCentroid = sparkContext.broadcast(avgCentroid)
 
-    val centroidesWithId = centroides.zipWithIndex()
+    val centroidsWithId = centroids.zipWithIndex()
       .map(_.swap).cache()
 
-    val cartesianCentroides = centroidesWithId.cartesian(centroidesWithId).filter(x => x._1._1 != x._2._1)
+    val cartesianCentroids = centroidsWithId.cartesian(centroidsWithId).filter(x => x._1._1 != x._2._1)
 
-    val davis = cartesianCentroides.map { case (x, y) => (x._1.toInt, (bcAvgCentroid.value(x._1.toInt) + bcAvgCentroid.value(y._1.toInt)) / Vectors.sqdist(x._2, y._2)) }
+    val davis = cartesianCentroids.map { case (x, y) => (x._1.toInt, (bcAvgCentroid.value(x._1.toInt) + bcAvgCentroid.value(y._1.toInt)) / Vectors.sqdist(x._2, y._2)) }
       .groupByKey
       .map(_._2.max)
       .reduce(_ + _)
 
     val bouldin = davis / numberCluster
 
+    stopTime = System.nanoTime
+    val elapsedTimeDavis = (stopTime - startTime) / 1e9d
+
     //WSSSE
+    startTime = System.nanoTime
     val wssse = linkage.computeCost(data.rdd.map(r => Vectors.dense(r.toArray)))
 
-    (silhoutteBD, dunnBD, bouldin, wssse)
+    stopTime = System.nanoTime
+    val elapsedTimeWSSSE = (stopTime - startTime) / 1e9d
+
+    (silhouetteBD, dunnBD, bouldin, wssse, elapsedTimeSil, elapsedTimeDunn, elapsedTimeDavis, elapsedTimeWSSSE)
   }
 
   /**
-    * Calculate Silhouette index.
+    * Calculate Silhouette index and its execution time.
     *
     * @param data Array with the Vector for each cluster.
     * @example getSilhouette(data)
     */
-  def getSilhouette(data: Array[(Int, scala.Iterable[Vector])]): (Double, Double, Double) = {
+  def getSilhouette(data: Array[(Int, scala.Iterable[Vector])]): (Double, Double, Double, Double) = {
+
+    val start = System.nanoTime
 
     //Set up the global variables
     var b = 0.0
@@ -145,17 +252,22 @@ object Indices {
     a = a / data.map(_._2.size).sum
     silhouette = silhouette / data.map(_._2.size).sum
 
-    (b, a, silhouette)
+    val stopTime = System.nanoTime
+    val elapsedTimeSil = (stopTime - start) / 1e9d
+
+    (b, a, silhouette, elapsedTimeSil)
 
   }
 
   /**
-    * Calculate Dunn index with minimum inter-cluster and maximum intra-cluster average distances.
+    * Calculate Dunn index with minimum inter-cluster and maximum intra-cluster average distances and its execution time.
     *
     * @param data Array with the Vector for each cluster.
     * @example getDunn(data)
     */
-  def getDunn(data: Array[(Int, scala.Iterable[Vector])]): (Double, Double, Double) = {
+  def getDunn(data: Array[(Int, scala.Iterable[Vector])]): (Double, Double, Double, Double) = {
+
+    val start = System.nanoTime
 
     //Set up the global variables
     var intra = 0.0
@@ -235,7 +347,10 @@ object Indices {
     //Calculate the dunn measure = minimum average inter-cluster distance / maximum average intra-cluster distance
     dunn = inter / intra
 
-    (inter, intra, dunn)
+    val stopTime = System.nanoTime
+    val elapsedTimeDunn = (stopTime - start) / 1e9d
+
+    (inter, intra, dunn, elapsedTimeDunn)
 
   }
 
